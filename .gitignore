@@ -1,0 +1,11 @@
+# Claude Code / dev tooling
+.claude/
+.mcp.json
+
+# Milestone backups (kept locally, not versioned; git history serves this now)
+backup/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+desktop.ini

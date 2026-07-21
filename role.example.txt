@@ -1,0 +1,7 @@
+easykey:pocket
+# Copy this file to "role.txt" on each EasyKey computer and set the role.
+# Valid roles:
+#   easykey:pocket   -> advanced pocket computer (carry-around key tool + keypad)
+#   easykey:server   -> central authority (verifies keys, issues sessions)
+#   easykey:control  -> door controller (opens doors by proximity)
+# The per-role installer writes role.txt for you automatically.
