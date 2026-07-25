@@ -139,17 +139,38 @@ local function guard(path)
 end
 
 -- ---------- http ----------
-local function fetch(url)
+--- One attempt. Note the THREE return values from pcall: http.get signals failure as
+--- `nil, message`, so pcall gives back ok, handle, message — and capturing only the first two
+--- throws away the one piece of information the user actually needs when a fetch fails.
+local function fetchOnce(url)
     if not http then return nil, "this computer has no HTTP API (enable it in the CC config)" end
-    local ok, handle = pcall(http.get, url)
+    local ok, handle, httpErr = pcall(http.get, url)
     if not ok then return nil, tostring(handle) end
-    if not handle then return nil, "no response" end
+    if not handle then return nil, tostring(httpErr or "no response") end
     local body = handle.readAll()
     local code = handle.getResponseCode and handle.getResponseCode() or 200
     handle.close()
     if code ~= 200 then return nil, "HTTP " .. tostring(code) end
     if type(body) ~= "string" or #body == 0 then return nil, "empty response" end
     return body
+end
+
+--- Fetch with a couple of retries. An update pulls dozens of files in a row, and a single
+--- transient hiccup part way through would otherwise abandon the whole run — correct, but
+--- needlessly fragile when waiting a second usually fixes it.
+local function fetch(url)
+    local lastErr
+    for attempt = 1, 3 do
+        local body, err = fetchOnce(url)
+        if body then return body end
+        lastErr = err
+        -- don't burn retries on something that will never succeed
+        if type(err) == "string" and (err:find("HTTP 4", 1, true) or err:find("no HTTP API", 1, true)) then
+            break
+        end
+        if attempt < 3 then sleep(1) end
+    end
+    return nil, lastErr
 end
 
 -- ---------- start ----------

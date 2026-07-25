@@ -1,6 +1,6 @@
 -- ===================================================================
 -- EasyKey -- Pocket Key Tool installer  (role: easykey:pocket)
--- Generated 2026-07-25T14:42:26.441Z
+-- Generated 2026-07-25T14:46:26.260Z
 --
 -- Usage:  run this file on the target computer (pastebin run / wget run).
 -- Attach an ENDER MODEM pocket upgrade before running.

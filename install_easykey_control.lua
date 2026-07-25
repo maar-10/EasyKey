@@ -1,6 +1,6 @@
 -- ===================================================================
 -- EasyKey -- Door Control installer  (role: easykey:control)
--- Generated 2026-07-25T14:42:26.458Z
+-- Generated 2026-07-25T14:46:26.275Z
 --
 -- Usage:  run this file on the target computer (pastebin run / wget run).
 -- Attach an ENDER MODEM to this computer before running.

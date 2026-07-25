@@ -1,6 +1,6 @@
 -- ===================================================================
 -- EasyKey -- Manual Control (panel) installer  (role: easykey:manual)
--- Generated 2026-07-25T14:42:26.453Z
+-- Generated 2026-07-25T14:46:26.271Z
 --
 -- Usage:  run this file on the target computer (pastebin run / wget run).
 -- Attach an ENDER MODEM, and a MONITOR for the UI (optional).

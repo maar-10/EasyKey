@@ -15,8 +15,8 @@
   ["base"] = "https://raw.githubusercontent.com/maar-10/EasyKey/main",
   ["basalt"] = "https://raw.githubusercontent.com/Pyroxenium/Basalt2/f6cde73ad4ee4fc5a6bf256f7fd0dbbb5b1da928/release/basalt-full.lua",
   ["updater"] = {
-    ["size"] = 19521,
-    ["sum"] = "d7bee70d",
+    ["size"] = 20527,
+    ["sum"] = "603c3865",
   },
   ["roles"] = {
     ["pocket"] = {

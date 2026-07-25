@@ -295,6 +295,50 @@ check(parsed and type(parsed.roles) == "table" and parsed.roles.elevator ~= nil,
 check(parsed and parsed.version ~= nil and parsed.schema ~= nil,
     "...and its version + schema")
 
+-- =====================================================================
+-- Scenario 12: the tree the updater produced actually BOOTS
+-- =====================================================================
+-- The point of the whole exercise. Every check above is about files being in the right state;
+-- this is the one that says the result is a working install. A manifest that shipped a role
+-- without one of its modules would pass all of the above and die on `require` here.
+log("")
+log("SCENARIO 12  the updated tree boots the role")
+-- role is `elevator` by now (scenario 8), which needs a modem and a pinned server to get past
+-- pairing -- same setup tests/boot_smoke.lua uses.
+--
+-- Scenario 4 planted a FAKE /.easykey_id to prove the updater leaves an identity alone. It did
+-- its job; it is not a real ecnet2 key, so ecnet2.Identity chokes on it. Clear it and let the
+-- role mint a real one, which is what a genuine first boot does anyway.
+if fs.exists("/.easykey_id") then fs.delete("/.easykey_id") end
+if periphemu then pcall(function() periphemu.create("back", "modem") end) end
+do
+    local ok, Config = pcall(dofile, "/easykey/config.lua")
+    if ok and Config and not fs.exists(Config.serverFile) then
+        pcall(function()
+            package.path = "/?.lua;/?/init.lua;" .. package.path
+            require("ccryptolib.random").initWithTiming()
+            local id = require("ecnet2").Identity("/.probe_server_id")
+            writeFile(Config.serverFile, id.address)
+        end)
+    end
+end
+local bootErr = nil
+parallel.waitForAny(
+    function()
+        local ok, err = pcall(function()
+            package.path = "/?.lua;/?/init.lua;" .. package.path
+            local launch = require("easykey.launch")
+            local raw = readFile("/role.txt") or ""
+            local _, r = raw:match("^%s*([%w_]+)%s*:%s*([%w_]+)")
+            launch(r) -- blocks in the role's event loop if healthy
+        end)
+        if not ok then bootErr = tostring(err) end
+    end,
+    function() sleep(2.5) end -- a healthy role never returns; this ends the run
+)
+if bootErr then log("      boot error: " .. bootErr) end
+check(bootErr == nil, "the role installed by the updater boots and runs its loop")
+
 log("")
 log("failures = " .. failures)
 log(failures == 0 and "UPDATER_OK" or ("UPDATER_FAIL (" .. failures .. ")"))
