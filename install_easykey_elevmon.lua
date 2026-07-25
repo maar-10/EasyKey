@@ -1,6 +1,6 @@
 -- ===================================================================
 -- EasyKey -- Elevator Monitor (at the shaft) installer  (role: easykey:elevmon)
--- Generated 2026-07-25T15:24:59.026Z
+-- Generated 2026-07-25T15:28:18.506Z
 --
 -- Usage:  run this file on the target computer (pastebin run / wget run).
 -- Attach an ENDER MODEM to this computer before running.

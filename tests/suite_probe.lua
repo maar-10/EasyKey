@@ -141,6 +141,10 @@ local bodyOk, bodyErr = pcall(function()
     local ver1 = (readFile("/easykey_version.txt") or ""):match("version=(%w+)")
     check(ver1 ~= nil and #ver1 > 0, "the version stamp has a version (" .. tostring(ver1) .. ")")
     check(not fs.exists("/basalt.lua"), "elevmon needs no Basalt, so none was fetched")
+    -- A FRESH install has no config.lua to have hand-edited, so telling the operator to re-apply
+    -- their edits is noise -- and noise is how a warning gets ignored the day it matters.
+    check(not contains(o1, "Re-apply any hand-edits"),
+        "a fresh install does not warn about hand-edits that cannot exist")
     -- staging files must never be left behind
     local leftovers = 0
     local function sweep(dir)

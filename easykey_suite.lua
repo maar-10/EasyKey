@@ -451,10 +451,14 @@ if schemaBump and localSchema ~= nil then
 end
 
 -- 2. easykey/config.lua is a SHIPPED file, so an update replaces it — and it is also the one
---    shipped file people hand-edit (seedKeys, session length, ranges). Always copy it aside, so
---    an edit is recoverable instead of silently gone.
+--    shipped file people hand-edit (seedKeys, session length, ranges). Copy it aside, so an edit
+--    is recoverable instead of silently gone.
+--
+--    Only when one was actually there: `missing` means a fresh install, and telling somebody to
+--    "re-apply your hand-edits" to a computer that has never been configured is noise that makes
+--    the warning easier to ignore the day it matters.
 for _, c in ipairs(changes) do
-    if c.entry.dst == "easykey/config.lua" then
+    if c.entry.dst == "easykey/config.lua" and c.reason ~= "missing" then
         print("")
         warn("easykey/config.lua is being replaced.")
         if backup("/easykey/config.lua") then
