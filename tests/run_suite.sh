@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Scenario test for easykey_update.lua.
+# Scenario test for easykey_suite.lua.
 #
 # The updater talks HTTP, so this serves the repo from localhost and points the updater at it
-# with /easykey_update_src.txt. Two mirrors are served:
+# with /easykey_suite_src.txt. Two mirrors are served:
 #
 #   good/     an exact copy of the repo
 #   corrupt/  the same, except easykey/link.lua has been tampered with so its bytes no longer
@@ -13,7 +13,7 @@ set -euo pipefail
 
 EASYKEY="$(cd "$(dirname "$0")/.." && pwd)"
 CRAFTOS="/c/Program Files/CraftOS-PC/CraftOS-PC_console.exe"
-WORK="${TMPDIR:-/tmp}/easykey_updater"
+WORK="${TMPDIR:-/tmp}/easykey_suite_e2e"
 DATA="$WORK/data"
 C0="$DATA/computer/0"
 SERVE="$WORK/serve"
@@ -27,7 +27,7 @@ for m in good corrupt; do
   mkdir -p "$SERVE/$m"
   cp "$EASYKEY/manifest.lua" "$SERVE/$m/"
   cp "$EASYKEY/startup.lua" "$SERVE/$m/"
-  cp "$EASYKEY/easykey_update.lua" "$SERVE/$m/"
+  cp "$EASYKEY/easykey_suite.lua" "$SERVE/$m/"
   for d in easykey shared vendor; do
     mkdir -p "$SERVE/$m/$d"
     cp -r "$EASYKEY/$d/." "$SERVE/$m/$d/"
@@ -108,9 +108,9 @@ process.stdout.write("{\n" + rows.join("\n") + "\n}\n");
 # ---------- lay out the computer ----------
 printf 'http://127.0.0.1:%s/good' "$PORT"    > "$C0/mirror_base.txt"
 printf 'http://127.0.0.1:%s/corrupt' "$PORT" > "$C0/mirror_corrupt.txt"
-printf 'http://127.0.0.1:%s/good' "$PORT"    > "$C0/easykey_update_src.txt"
-cp "$EASYKEY/easykey_update.lua" "$C0/easykey_update.lua"
-cp "$EASYKEY/tests/updater_probe.lua" "$C0/startup.lua"
+printf 'http://127.0.0.1:%s/good' "$PORT"    > "$C0/easykey_suite_src.txt"
+cp "$EASYKEY/easykey_suite.lua" "$C0/easykey_suite.lua"
+cp "$EASYKEY/tests/suite_probe.lua" "$C0/startup.lua"
 
 # CraftOS-PC: allow HTTP to localhost (blocked by default as a private range).
 mkdir -p "$DATA/config"

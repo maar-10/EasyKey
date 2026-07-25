@@ -68,13 +68,33 @@ dimension reports no distance and never opens a door.
 > **Put the server somewhere protected.** It is the only machine holding anything worth
 > stealing.
 
-## Install (per computer)
+## Setup — the EasyKey Suite
 
-Host the installers on pastebin or your GitHub, then on each computer:
+**One command, on any computer, for every role, first install and every update after it:**
 
 ```
-wget run <raw-url-of-the-matching-installer>
+wget run https://raw.githubusercontent.com/maar-10/EasyKey/main/easykey_suite.lua
 ```
+
+Run it with no arguments and it works out what to do:
+
+- **nothing installed yet** → it asks what this computer should be, lists all six roles with the
+  hardware each one needs, and installs the one you pick;
+- **a role already installed** → it updates that role, fetching only the files that differ.
+
+```
+easykey_suite.lua              install (asking for a role) or update, as appropriate
+easykey_suite.lua --check      say what WOULD change; write nothing
+easykey_suite.lua --verify     re-check every file's checksum (repairs local corruption)
+easykey_suite.lua <role>       go straight to a role, no questions — also switches an existing one
+```
+
+Attach the ender modem, then reboot — `startup.lua` launches the right program automatically.
+
+### The self-extracting installers (offline fallback)
+
+The Suite needs HTTP. If a computer can't reach GitHub, the old per-role installers still work and
+embed everything they need (~300 KB each, including the pinned ecnet2 + ccryptolib):
 
 - `install_easykey_pocket.lua`   → advanced pocket computers (also downloads Basalt)
 - `install_easykey_server.lua`   → the one server
@@ -83,41 +103,19 @@ wget run <raw-url-of-the-matching-installer>
 - `install_easykey_elevator.lua` → each multi-floor elevator controller
 - `install_easykey_elevmon.lua`  → the PC at each lift shaft
 
-Each installer is self-contained (~300 KB): it embeds only the files that role needs
-**plus the pinned ecnet2 + ccryptolib crypto libraries**, so there is no half-downloaded
-install. It sets `role.txt` for you. Attach the ender modem, then reboot — `startup.lua`
-launches the right program automatically. Unpacking the crypto libs takes a few seconds.
+**Prefer the Suite where you can.** An installer overwrites files as it unpacks, so an
+interruption part way through leaves a mixed tree; the Suite stages everything first and commits
+only once all of it has arrived. An installer also replaces `easykey/config.lua` silently, where
+the Suite backs up a hand-edited one and tells you.
 
-> **Re-running an installer is safe for your data.** It writes code files and `role.txt`
-> only; every `/easykey_*.cfg` (the server's keys, approvals and monitor list; a control's
-> outputs; a panel's controls; an elevator's lifts) and the pinned server address in
-> `/easykey_server.txt` are left alone. Upgrading the server does **not** cost you a
-> re-pair, a re-approval, or your keys.
->
-> Two caveats: `easykey/config.lua` **is** a shipped file, so hand-edits to it (a cleared
-> `seedKeys`, a changed `session_seconds`) are overwritten; and an installer overwrites as it
-> unpacks, so an interruption half way through leaves a mixed tree. **The updater below has
-> neither problem** — prefer it for upgrades.
+Both are safe for your data either way: every `/easykey_*.cfg` (the server's keys, approvals and
+monitor list; a control's outputs; a panel's controls; an elevator's lifts), your device identity
+and the pinned server address in `/easykey_server.txt` are left alone. Upgrading does **not** cost
+you a re-pair, a re-approval, or your keys.
 
-## Updating (after the first install)
+### What the Suite guarantees
 
-Once a computer has EasyKey on it, you never need the big installers again:
-
-```
-wget run https://raw.githubusercontent.com/maar-10/EasyKey/main/easykey_update.lua
-```
-
-It carries no payload. It works out which role this computer is running, asks GitHub what the
-current release contains, and fetches **only the files that actually differ**.
-
-```
-easykey_update.lua              update whatever role is installed here
-easykey_update.lua --check      say what WOULD change; write nothing
-easykey_update.lua --verify     re-check every file's checksum (repairs local corruption)
-easykey_update.lua <role>       install/switch to a role — this one DOES rewrite role.txt
-```
-
-Three properties make it safer than re-running an installer:
+Three properties, each doing real work:
 
 - **All-or-nothing.** Every replacement is downloaded and checksum-verified into a `.eknew`
   staging file first; they are moved into place only once *every* one has arrived intact. A
@@ -139,9 +137,16 @@ Also worth knowing:
   `--verify` when you suspect a file on disk is wrong, which no version stamp can detect.
 - **Basalt is only re-downloaded** when it is missing or the pinned URL moved — pulling 300 KB
   on every update would make this unusable.
-- It tells you when **the updater itself** is out of date, but never replaces itself mid-run.
+- It tells you when **the Suite itself** is out of date, but never replaces itself mid-run.
 - To point a computer at a fork or a local mirror, put the base URL (one line, no trailing
-  slash) in `/easykey_update_src.txt`.
+  slash) in `/easykey_suite_src.txt`.
+- **A mixed-version fleet is fine.** The wire version has not moved, so an old pocket, control
+  or manual keeps talking to a current server — and an old pocket renders a *new* elevator's
+  floors on its Lifts tab without being touched. The one exception is the **server**: a release
+  older than the elevators cannot recognise the `elevator` or `elevmon` roles at all, so it
+  files an elevator controller under "pockets", never sends it the secure-set, and every floor
+  call is refused. Update the server first. All of this is pinned down by
+  `tests/run_suite_e2e.sh`.
 
 What it reads is `manifest.lua` at the repo root — generated by `tools/gen_installers.js` from
 the same per-role file lists the installers use, so there is one source of truth and the
@@ -463,11 +468,14 @@ bash tests/run_boot_smoke.sh    # boots all 6 roles with an emulated modem
 node tools/gen_installers.js    # regenerate installers + manifest.lua (refuses to ship
                                 #   an incomplete role)
 bash tests/verify_installers.sh # installs, compiles AND boots each role from its installer
-bash tests/run_updater.sh       # 54 checks: drives easykey_update.lua against a real HTTP
+bash tests/run_suite.sh         # 68 checks: drives easykey_suite.lua against a real HTTP
                                 #   server (needs python + node on PATH)
+bash tests/run_suite_e2e.sh     # 196 checks: a six-computer MIXED-VERSION fleet, installed
+                                #   partly by the Suite and partly by an old release, then
+                                #   updated (E2E_ROLES="control" limits it to one PC)
 ```
 
-`run_updater.sh` serves two local mirrors of the repo — a good one and one with a tampered file
+`run_suite.sh` serves two local mirrors of the repo — a good one and one with a tampered file
 whose bytes no longer match the manifest — and drives the updater through fresh install, no-op,
 repair, role switch, a hand-edited config, a schema bump and a corrupted download. It exists
 because the updater's whole job is touching other files, so what has to be proven is restraint:
@@ -497,7 +505,8 @@ timing.
 
 ```
 startup.lua                 role launcher (reads role.txt "easykey:<role>")
-easykey_update.lua          the updater: role detection + fetch-only-what-changed
+easykey_suite.lua          THE SUITE: role detection, first-time install, and
+                           fetch-only-what-changed updates
 manifest.lua                GENERATED release manifest the updater reads (per-role file
                             lists with sizes + checksums, version, config schema)
 .gitattributes              LF everywhere — load-bearing, see the file's own comment

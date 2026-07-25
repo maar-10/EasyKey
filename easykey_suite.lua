@@ -1,20 +1,24 @@
 -- ===================================================================
--- EasyKey updater  --  one program, every role, straight from GitHub
+-- EasyKey Suite  --  the setup tool: installs any role, updates every role
 --
---   wget run https://raw.githubusercontent.com/maar-10/EasyKey/main/easykey_update.lua
+--   wget run https://raw.githubusercontent.com/maar-10/EasyKey/main/easykey_suite.lua
 --
--- Unlike the install_easykey_*.lua files, this carries no payload. It works out which role this
--- computer is running, asks GitHub what the current release contains, and fetches only the files
--- that actually differ. Your configuration is never touched.
+-- This is the official way to put EasyKey on a computer and the official way to keep it current.
+-- Unlike the install_easykey_*.lua files it carries no payload: it asks GitHub what the current
+-- release contains and fetches only what this computer actually needs.
 --
---   easykey_update.lua              update whatever role is installed here
---   easykey_update.lua --check      say what WOULD change; write nothing
---   easykey_update.lua --verify     re-check every file's checksum (repairs local corruption)
---   easykey_update.lua <role>       install/switch to a role (pocket|server|control|manual|
---                                   elevator|elevmon) -- this one DOES rewrite role.txt
+-- Run it with no arguments and it works out what to do:
+--   * nothing installed  -> it asks which role this computer should be, and installs it
+--   * a role installed   -> it updates that role, fetching only the files that differ
 --
--- Three properties worth knowing about, because they are why this is safer than re-running an
--- installer:
+--   easykey_suite.lua              install (asking for a role) or update, as appropriate
+--   easykey_suite.lua --check      say what WOULD change; write nothing
+--   easykey_suite.lua --verify     re-check every file's checksum (repairs local corruption)
+--   easykey_suite.lua <role>       go straight to a role, no questions (pocket|server|control|
+--                                   manual|elevator|elevmon) -- also switches an existing one
+--
+-- Your configuration is never touched. Three properties worth knowing about, because they are
+-- why this is safer than re-running an installer:
 --
 --   * ALL-OR-NOTHING. Every replacement is downloaded and checksum-verified into a `.eknew`
 --     staging file first. Only once every single one has arrived intact are they moved into
@@ -37,7 +41,7 @@ local DEFAULT_BASE = "https://raw.githubusercontent.com/maar-10/EasyKey/main"
 
 --- A computer may point itself at a fork or a local mirror. One line, the base URL, no trailing
 --- slash. This is also how the test harness serves the repo from localhost.
-local SOURCE_FILE  = "/easykey_update_src.txt"
+local SOURCE_FILE  = "/easykey_suite_src.txt"
 
 --- Where the updater records what generation is installed. Written by the installers too.
 local VERSION_FILE = "/easykey_version.txt"
@@ -50,16 +54,31 @@ local BACKUP_DIR   = "/easykey_backup"
 --- before each write as a belt-and-braces check rather than trusted to the manifest.
 local PROTECTED = {
     "^/role%.txt$",              -- which role this computer is (only an explicit role arg moves it)
-    "^/%.easykey_id$",           -- this device's ecnet2 identity == its approval on the server
+    -- The identity is a DIRECTORY (ecnet2 keeps address.txt + id.bin + id.bin.bak inside it), so
+    -- this must NOT be anchored with $ or everything underneath it would be unprotected. It is
+    -- the device's approval on the server: replacing it means re-approving the computer by hand,
+    -- which is the single worst thing an update could silently do.
+    "^/%.easykey_id",
     "^/easykey_[%w_]*%.cfg",     -- every persisted config: keys, approvals, panels, lifts, outputs
     "^/easykey_server%.txt$",    -- the pinned server address
     "^/easykey_bg%.cfg$",        -- pocket wallpaper
     "^/easykey_error%.txt$",     -- the error log
-    "^/easykey_update_src%.txt$",-- the source override itself
+    "^/easykey_suite_src%.txt$",-- the source override itself
     "^/easykey_backup/",         -- our own backups
 }
 
 local ROLE_NAMES = { "pocket", "server", "control", "manual", "elevator", "elevmon" }
+
+--- What each role IS, and what hardware it needs — shown when the Suite has to ask. Picking the
+--- wrong role and finding out after a reboot is the mistake worth spending screen space to avoid.
+local ROLE_HELP = {
+    pocket   = { "the key tool you carry",        "ADVANCED POCKET computer + ender modem upgrade" },
+    server   = { "the vault: keys + approvals",   "ADVANCED computer + ender modem (+ monitor)" },
+    control  = { "doors that open by proximity",  "any computer + ender modem" },
+    manual   = { "panel of buttons and switches", "ADVANCED computer + ender modem (+ monitor)" },
+    elevator = { "multi-floor lift controller",   "ADVANCED computer + ender modem (+ monitor)" },
+    elevmon  = { "reports a cabin's position",    "any computer + ender modem, at the shaft" },
+}
 
 -- ---------- output ----------
 local function colour(c) if term.isColour and term.isColour() then term.setTextColour(c) end end
@@ -77,7 +96,7 @@ end
 
 -- ---------- checksum ----------
 -- FNV-1a, 32 bit, lower-case hex. MUST agree byte for byte with fnv1a() in
--- tools/gen_installers.js; tests/run_updater.sh asserts that it does.
+-- tools/gen_installers.js; tests/run_suite.sh asserts that it does.
 local FNV_PRIME, FNV_OFFSET = 16777619, 2166136261
 
 local function checksum(s)
@@ -179,7 +198,7 @@ say("EasyKey updater", colours.cyan)
 
 local args = { ... }
 -- Two INDEPENDENT switches, not one mode. `--verify` says how hard to look; `--check` says don't
--- write. `easykey_update.lua --verify --check` is the useful combination — "tell me what a full
+-- write. `easykey_suite.lua --verify --check` is the useful combination — "tell me what a full
 -- re-check would repair" — and a single `mode` variable silently threw one of them away.
 local dryRun, forceVerify, wantRole = false, false, nil
 for _, a in ipairs(args) do
@@ -205,29 +224,76 @@ if not manifestBody then die("could not reach the release manifest: " .. tostrin
 
 -- Parsed as DATA, not run as code: unserialise evaluates a table constructor in an empty
 -- environment, so the manifest cannot do anything but describe files. (Its leading `--` comment
--- block is fine — Lua's own parser skips comments, and tests/run_updater.sh checks that.)
+-- block is fine — Lua's own parser skips comments, and tests/run_suite.sh checks that.)
 local manifest = textutils.unserialise(manifestBody)
 if type(manifest) ~= "table" or type(manifest.roles) ~= "table" or not manifest.version then
     die("the release manifest is not readable (is the source URL right?)")
 end
 
 -- ---------- which role ----------
+--- Ask. Only reached when nothing is installed and no role was named, which is exactly the
+--- first-time-setup case: the operator has just wget-run this on a bare computer and the one
+--- thing the Suite cannot work out for itself is what they want this computer to be.
+---
+--- Returns the chosen role, or nil if they backed out.
+local function askForRole()
+    warn("No EasyKey install found on this computer.")
+    print("")
+    say("What should this computer be?", colours.white)
+    print("")
+    for i, name in ipairs(ROLE_NAMES) do
+        local h = ROLE_HELP[name] or { "", "" }
+        say(("  %d) %-9s %s"):format(i, name, h[1]), colours.white)
+        dim(("       %s"):format(h[2]))
+    end
+    print("")
+    -- --check must never sit waiting for a keypress: it exists to be safe to run blind.
+    if dryRun then
+        dim("--check: not asking, and nothing was written.")
+        return nil
+    end
+    while true do
+        colour(colours.yellow)
+        write("Number (1-" .. #ROLE_NAMES .. "), or q to quit: ")
+        colour(colours.white)
+        local answer = (read() or ""):gsub("%s", "")
+        if answer == "q" or answer == "Q" then
+            print("")
+            dim("Nothing was installed.")
+            return nil
+        end
+        local pick = ROLE_NAMES[tonumber(answer) or 0]
+        -- typing the name works too; nobody should have to count rows
+        if not pick then
+            for _, name in ipairs(ROLE_NAMES) do
+                if name == answer:lower() then pick = name end
+            end
+        end
+        if pick then
+            print("")
+            good("Installing " .. pick .. " -- " .. (ROLE_HELP[pick] or {})[1])
+            dim("needs: " .. (ROLE_HELP[pick] or { "", "?" })[2])
+            print("")
+            return pick
+        end
+        bad("Not one of the choices.")
+    end
+end
+
 local role = wantRole
 if not role then
     local raw = readFile("/role.txt") or ""
     local system, detected = raw:match("^%s*([%w_]+)%s*:%s*([%w_]+)")
-    if system ~= "easykey" or not detected then
-        bad("No EasyKey role is installed on this computer.")
-        print("")
-        dim("This is an updater, not a first-time installer: it needs to know")
-        dim("which role to update. Either run one of the full installers, or")
-        dim("name a role and this will fetch it fresh:")
-        print("")
-        say("  easykey_update.lua <role>", colours.white)
-        dim("  roles: " .. table.concat(ROLE_NAMES, " | "))
-        return
+    if system == "easykey" and detected then
+        role = detected
+    else
+        role = askForRole()
+        if not role then colour(colours.white); return end
+        -- Chosen interactively, so this is a fresh install and role.txt has to be written.
+        -- Setting wantRole is what tells the rest of the run that, so the command-line and
+        -- interactive paths cannot drift apart.
+        wantRole = role
     end
-    role = detected
 end
 
 local spec = manifest.roles[role]
@@ -325,7 +391,7 @@ if #changes == 0 and not needBasalt then
     if updaterStale then
         print("")
         warn("The updater itself is out of date. Re-fetch it with:")
-        dim("  wget " .. base .. "/easykey_update.lua easykey_update.lua")
+        dim("  wget " .. base .. "/easykey_suite.lua easykey_suite.lua")
     end
     colour(colours.white)
     if not upToDateByVersion then
@@ -490,6 +556,6 @@ good("Now at " .. manifest.version .. ". Reboot to run it.")
 if updaterStale then
     print("")
     warn("The updater itself is out of date. Re-fetch it with:")
-    dim("  wget " .. base .. "/easykey_update.lua easykey_update.lua")
+    dim("  wget " .. base .. "/easykey_suite.lua easykey_suite.lua")
 end
 colour(colours.white)

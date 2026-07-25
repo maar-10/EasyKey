@@ -1,6 +1,6 @@
 -- ===================================================================
 -- EasyKey -- Manual Control (panel) installer  (role: easykey:manual)
--- Generated 2026-07-25T14:46:26.271Z
+-- Generated 2026-07-25T15:24:59.011Z
 --
 -- Usage:  run this file on the target computer (pastebin run / wget run).
 -- Attach an ENDER MODEM, and a MONITOR for the UI (optional).
@@ -11,7 +11,7 @@
 local SYSTEM  = "easykey"
 local ROLE    = "manual"
 local TITLE   = "Manual Control (panel)"
--- Recorded on the computer so easykey_update.lua knows what generation is installed. Not a
+-- Recorded on the computer so easykey_suite.lua knows what generation is installed. Not a
 -- config file: it is the updater's bookkeeping and is safe to delete (you just lose the ability
 -- to detect a config-schema bump, and the next update will assume the worst and back up).
 local VERSION = "30acb8bb1bb8"
@@ -148,4 +148,4 @@ else
 end
 print("Version " .. VERSION .. " (schema " .. SCHEMA .. ")")
 print("Reboot to start EasyKey (" .. ROLE .. ").")
-print("Later: run easykey_update.lua to update in place.")
+print("Later: run easykey_suite.lua to update in place.")
