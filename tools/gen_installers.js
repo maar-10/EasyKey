@@ -15,8 +15,22 @@
 
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 
 const ROOT = path.resolve(__dirname, "..");
+
+/**
+ * Read a source file as the exact bytes that must land on a CC computer: LF only.
+ *
+ * This is load-bearing for easykey_update.lua. The updater checksums the file on the computer
+ * against manifest.lua and refetches from raw.githubusercontent.com, which serves git's
+ * normalized (LF) copy. If an installer embedded CRLF from a working copy, a freshly installed
+ * computer would report those files as permanently outdated. `.gitattributes` keeps the working
+ * copy LF; this makes the generator independent of that anyway.
+ */
+function readNormalized(relPath) {
+  return fs.readFileSync(path.join(ROOT, relPath), "utf8").replace(/\r\n/g, "\n");
+}
 
 /** Recursively list .lua files under a directory, as repo-relative paths. */
 function luaFilesUnder(dir) {
@@ -186,6 +200,133 @@ const ROLES = {
 const BASALT_URL =
   "https://raw.githubusercontent.com/Pyroxenium/Basalt2/f6cde73ad4ee4fc5a6bf256f7fd0dbbb5b1da928/release/basalt-full.lua";
 
+// ---------------------------------------------------------------------------
+// manifest.lua — what easykey_update.lua reads to decide what to fetch
+// ---------------------------------------------------------------------------
+
+/**
+ * Bump ONLY when the shape of a persisted config file (an /easykey_*.cfg) changes in a way an
+ * older file cannot satisfy — i.e. when an update genuinely requires the operator's saved
+ * settings to be migrated or re-entered. Code changes do not touch this.
+ *
+ * The updater compares this against the number recorded on the computer, and on a bump it backs
+ * up every /easykey_*.cfg before writing anything and says so loudly. Adding an OPTIONAL field
+ * (which is what every change so far has been — loadConfig tolerates a missing one) is not a
+ * bump; removing or repurposing a field is.
+ */
+const CONFIG_SCHEMA = 1;
+
+/** Where the updater fetches from. A fork can override it per-computer; see the updater. */
+const SOURCE_BASE = "https://raw.githubusercontent.com/maar-10/EasyKey/main";
+
+/**
+ * FNV-1a, 32-bit, lower-case hex. Must match the Lua implementation in easykey_update.lua
+ * byte for byte — tests/run_updater.sh checks that they agree.
+ *
+ * Deliberately NOT a cryptographic hash, and it isn't pretending to be one. The trust root here
+ * is HTTPS to a pinned raw.githubusercontent.com URL; this only answers "did this file change"
+ * and "did the download arrive intact", and it is paired with the byte size. A 55-line pure-Lua
+ * SHA-256 would be more code to get wrong for no gain against the actual threat, and — unlike
+ * ccryptolib's — it has to work on a computer whose EasyKey install is broken.
+ */
+function fnv1a(text) {
+  const buf = Buffer.from(text, "utf8");
+  let h = 2166136261;
+  for (const b of buf) {
+    h = (h ^ b) >>> 0; // force unsigned: JS ^ yields int32, and the halves below assume unsigned
+    // 32-bit multiply by 16777619 in 16-bit halves. The naive product reaches ~7.2e16, past the
+    // 2^53 exact-integer limit of Lua's doubles, so both sides must split it the same way.
+    const lo = h % 65536;
+    const hi = (h - lo) / 65536;
+    h = (((hi * 16777619) % 65536) * 65536 + lo * 16777619) % 4294967296;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+/** A Lua table-constructor literal. Parsed on the computer with textutils.unserialise, so it is
+ *  DATA, never executed as code — the updater must not be a remote-code-execution surface any
+ *  wider than the files it is already fetching. */
+function luaValue(v, indent) {
+  const pad = "  ".repeat(indent);
+  const padIn = "  ".repeat(indent + 1);
+  if (typeof v === "string") return luaStr(v);
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "{}";
+    return "{\n" + v.map((e) => padIn + luaValue(e, indent + 1) + ",").join("\n") + "\n" + pad + "}";
+  }
+  const keys = Object.keys(v);
+  if (keys.length === 0) return "{}";
+  return (
+    "{\n" +
+    keys
+      .map((k) => `${padIn}[${luaStr(k)}] = ${luaValue(v[k], indent + 1)},`)
+      .join("\n") +
+    "\n" + pad + "}"
+  );
+}
+
+/** @returns {{ version: string, text: string }} */
+function buildManifest(roles) {
+  const roleTable = {};
+  const digestParts = [];
+  for (const [role, spec] of Object.entries(roles)) {
+    const files = spec.files.map(({ src, dst }) => {
+      const body = readNormalized(src);
+      const entry = {
+        src,
+        dst,
+        size: Buffer.byteLength(body, "utf8"),
+        sum: fnv1a(body),
+      };
+      digestParts.push(`${dst}:${entry.sum}:${entry.size}`);
+      return entry;
+    });
+    roleTable[role] = { title: spec.title, basalt: !!spec.basalt, files };
+  }
+
+  // A CONTENT digest, not a timestamp: the version changes if and only if a shipped byte
+  // changes. Regenerating with no source change must not make every computer look outdated.
+  digestParts.sort();
+  const version = crypto.createHash("sha256").update(digestParts.join("\n")).digest("hex").slice(0, 12);
+
+  const updaterBody = fs.existsSync(path.join(ROOT, "easykey_update.lua"))
+    ? readNormalized("easykey_update.lua")
+    : null;
+
+  const manifest = {
+    version,
+    schema: CONFIG_SCHEMA,
+    base: SOURCE_BASE,
+    basalt: BASALT_URL,
+    // So the updater can tell you IT is out of date. It deliberately does not replace itself
+    // mid-run — rewriting the program you are executing is a good way to end up with neither
+    // version working.
+    updater: updaterBody
+      ? { size: Buffer.byteLength(updaterBody, "utf8"), sum: fnv1a(updaterBody) }
+      : { size: 0, sum: "00000000" },
+    roles: roleTable,
+  };
+
+  const text =
+    "-- EasyKey release manifest. GENERATED by tools/gen_installers.js — do not edit by hand.\n" +
+    "--\n" +
+    "-- Read by easykey_update.lua over HTTPS. Parsed with textutils.unserialise, so this is a\n" +
+    "-- plain data table: no function calls, no `return`, nothing executable.\n" +
+    "--\n" +
+    "-- `sum` is FNV-1a 32-bit over the file's LF-normalised bytes, paired with `size`. It answers\n" +
+    "-- \"did this change\" and \"did the download arrive intact\"; the trust root is HTTPS to the\n" +
+    "-- pinned raw.githubusercontent.com URL, not this checksum.\n" +
+    "--\n" +
+    "-- `version` is a digest of every file's sum+size, so it moves only when shipped bytes move.\n" +
+    "-- `schema` is the persisted-config generation; a bump means saved settings need backing up.\n" +
+    luaValue(manifest, 0) +
+    "\n";
+
+  return { version, text };
+}
+
 function luaStr(s) {
   return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
 }
@@ -207,7 +348,7 @@ function missingModules(files) {
   const problems = [];
   for (const { src, dst } of files) {
     if (!/^(easykey\/|shared\/|startup\.lua)/.test(dst)) continue; // skip vendored libs
-    const body = fs.readFileSync(path.join(ROOT, src), "utf8");
+    const body = readNormalized(src);
     for (const m of body.matchAll(/require\s*\(?\s*["']([\w.]+)["']/g)) {
       const mod = m[1];
       if (!/^(easykey|shared)\./.test(mod)) continue;
@@ -218,10 +359,10 @@ function missingModules(files) {
   return problems;
 }
 
-function buildInstaller(role, spec) {
+function buildInstaller(role, spec, version) {
   const filesLua = spec.files
     .map(({ src, dst }) => {
-      const b64 = fs.readFileSync(path.join(ROOT, src)).toString("base64");
+      const b64 = Buffer.from(readNormalized(src), "utf8").toString("base64");
       return `  [${luaStr(dst)}] = ${luaStr(b64)},`;
     })
     .join("\n");
@@ -264,9 +405,14 @@ end
 -- ccryptolib crypto libraries) and sets role.txt automatically.
 -- ===================================================================
 
-local SYSTEM = "easykey"
-local ROLE   = ${luaStr(role)}
-local TITLE  = ${luaStr(spec.title)}
+local SYSTEM  = "easykey"
+local ROLE    = ${luaStr(role)}
+local TITLE   = ${luaStr(spec.title)}
+-- Recorded on the computer so easykey_update.lua knows what generation is installed. Not a
+-- config file: it is the updater's bookkeeping and is safe to delete (you just lose the ability
+-- to detect a config-schema bump, and the next update will assume the worst and back up).
+local VERSION = ${luaStr(version)}
+local SCHEMA  = ${CONFIG_SCHEMA}
 
 local FILES = {
 ${filesLua}
@@ -313,6 +459,12 @@ local n = 0
 for p, data in pairs(FILES) do writeFile("/" .. p, b64decode(data)); n = n + 1 end
 print(" + " .. n .. " files written")
 ${basaltBlock}
+do
+  local f = fs.open("/easykey_version.txt", "w")
+  f.write(("version=%s\\nschema=%d\\nrole=%s\\n"):format(VERSION, SCHEMA, ROLE))
+  f.close()
+end
+
 if fs.exists("/role.txt") then
   local f = fs.open("/role.txt", "r"); local cur = f.readLine(); f.close()
   print("role.txt already set to: " .. tostring(cur) .. " (delete it to change)")
@@ -320,27 +472,44 @@ else
   local f = fs.open("/role.txt", "w"); f.write(SYSTEM .. ":" .. ROLE); f.close()
   print("Wrote role.txt = " .. SYSTEM .. ":" .. ROLE)
 end
+print("Version " .. VERSION .. " (schema " .. SCHEMA .. ")")
 print("Reboot to start EasyKey (" .. ROLE .. ").")
+print("Later: run easykey_update.lua to update in place.")
 `;
 }
 
+// The completeness check runs BEFORE anything is written, for every role. A manifest that
+// promised a file the installer didn't ship would send the updater chasing a 404, so the guard
+// now protects both outputs — and it fails the whole run rather than writing a good manifest
+// alongside a broken installer.
 let failed = false;
 for (const [role, spec] of Object.entries(ROLES)) {
   const problems = missingModules(spec.files);
   if (problems.length) {
     failed = true;
-    console.error(`\nERROR: install_easykey_${role}.lua would be incomplete:`);
+    console.error(`\nERROR: role '${role}' would be incomplete:`);
     for (const p of problems) console.error("  - " + p);
-    continue;
   }
+}
+if (failed) {
+  console.error("\nNothing written. Add the missing file(s) to the manifest in this file.");
+  process.exit(1);
+}
+
+const { version, text: manifestText } = buildManifest(ROLES);
+
+for (const [role, spec] of Object.entries(ROLES)) {
   const outPath = path.join(ROOT, `install_easykey_${role}.lua`);
-  const body = buildInstaller(role, spec);
+  const body = buildInstaller(role, spec, version);
   fs.writeFileSync(outPath, body);
   console.log(
     `wrote ${path.basename(outPath)}  (${spec.files.length} files${spec.basalt ? " + basalt" : ""}, ${(body.length / 1024).toFixed(0)} KB)`
   );
 }
-if (failed) {
-  console.error("\nNo installer written for the role(s) above. Add the missing file(s) to the manifest.");
-  process.exit(1);
-}
+
+fs.writeFileSync(path.join(ROOT, "manifest.lua"), manifestText);
+const fileCount = Object.values(ROLES).reduce((n, s) => n + s.files.length, 0);
+console.log(
+  `wrote manifest.lua       (version ${version}, schema ${CONFIG_SCHEMA}, ` +
+    `${Object.keys(ROLES).length} roles / ${fileCount} entries)`
+);

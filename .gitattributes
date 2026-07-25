@@ -1,0 +1,16 @@
+# Everything in this repo is LF, in the working copy as well as in git.
+#
+# This is load-bearing, not cosmetic. `easykey_update.lua` compares a checksum of the file on
+# the CC computer against a checksum in `manifest.lua`, and fetches replacements from
+# raw.githubusercontent.com. If a working copy had CRLF while git stored LF, then the
+# installers (which embed the working copy) and GitHub (which serves the normalized version)
+# would disagree byte-for-byte — and a freshly installed computer would report those files as
+# permanently outdated. `eol=lf` on checkout keeps all three in agreement.
+* text=auto eol=lf
+
+# Explicitly binary-free: every file here is text.
+*.lua text eol=lf
+*.js  text eol=lf
+*.sh  text eol=lf
+*.md  text eol=lf
+*.txt text eol=lf
