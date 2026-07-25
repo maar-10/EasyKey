@@ -138,6 +138,47 @@ const ROLES = {
       ...VENDOR,
     ],
   },
+  elevator: {
+    title: "Elevator Control (multi-floor lifts)",
+    basalt: true,
+    files: [
+      ...COMMON,
+      ...[
+        "shared/ui/kvstore.lua",
+        "easykey/logic/access.lua",
+        "easykey/logic/elevator.lua",
+        "easykey/redstone_io.lua",
+        "easykey/elevator.lua",
+        "easykey/ui/elevator_app.lua",
+        "easykey/ui/views/topbar.lua",
+        "easykey/ui/views/console.lua",
+        "easykey/ui/views/elev_ops.lua",
+        "easykey/ui/views/elev_edit.lua",
+        "easykey/ui/views/floor_edit.lua",
+        "easykey/ui/views/panel_view.lua", // the operator's own copy of the floor buttons
+        "easykey/ui/views/rowlist.lua",
+        "easykey/ui/keyboard.lua",
+        "easykey/ui/keypad.lua", // the lift form's numeric second values
+        "easykey/logic/keypad_model.lua", // ...which the keypad drives
+        "easykey/ui/palette.lua",
+      ].map(own),
+      ...VENDOR,
+    ],
+  },
+  elevmon: {
+    title: "Elevator Monitor (at the shaft)",
+    basalt: false,
+    files: [
+      ...COMMON,
+      ...[
+        "shared/ui/kvstore.lua",
+        "easykey/redstone_io.lua",
+        "easykey/ui/elevmon_console.lua",
+        "easykey/elevmon.lua",
+      ].map(own),
+      ...VENDOR,
+    ],
+  },
 };
 
 // Full build (basalt-full.lua) — the user runs the full element set in-game, so that is
@@ -209,7 +250,7 @@ end
   const modemNote =
     role === "pocket"
       ? "Attach an ENDER MODEM pocket upgrade before running."
-      : (role === "server" || role === "manual")
+      : (role === "server" || role === "manual" || role === "elevator")
         ? "Attach an ENDER MODEM, and a MONITOR for the UI (optional)."
         : "Attach an ENDER MODEM to this computer before running.";
 

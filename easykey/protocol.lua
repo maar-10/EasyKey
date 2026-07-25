@@ -15,20 +15,23 @@ local Protocol = {}
 local PROTOCOL_VERSION = 2
 Protocol.VERSION = PROTOCOL_VERSION
 
---- Protocol names (these also select the ecnet2 channel, so the two legs are
+--- Protocol names (these also select the ecnet2 channel, so the legs are
 --- separated at the transport level).
 Protocol.NAMES = {
-    SERVER  = "easykey_server",  -- pocket->server, control->server
-    CONTROL = "easykey_control", -- pocket->control (presence)
+    SERVER   = "easykey_server",  -- pocket->server, control->server
+    CONTROL  = "easykey_control", -- pocket->control (presence, panel traffic)
+    ELEVATOR = "easykey_elev",    -- elevator controller <-> elevator monitor
 }
 
 --- Device roles. A device announces its role in HELLO so the server knows which
 --- approval queue to put it in. This is only a *claim* and grants nothing: what a
 --- device may do is decided by which approved list the operator puts its address in.
 Protocol.ROLES = {
-    POCKET  = "pocket",
-    CONTROL = "control", -- proximity door controller
-    MANUAL  = "manual",  -- remote panel: fires on button/switch taps from a pocket
+    POCKET   = "pocket",
+    CONTROL  = "control",  -- proximity door controller
+    MANUAL   = "manual",   -- remote panel: fires on button/switch taps from a pocket
+    ELEVATOR = "elevator", -- multi-floor lift controller; publishes floors as panel buttons
+    ELEVMON  = "elevmon",  -- a PC at a lift shaft: pulses call contacts, reads arrival contacts
 }
 
 Protocol.TYPES = {
@@ -49,12 +52,19 @@ Protocol.TYPES = {
     STATUS           = "status",           -- approved / pending, for the pairing UI
     -- server -> control
     SECURE_SET       = "secure_set",       -- [{ address, expiresAt }] + heartbeat
+    -- server -> elevator controller
+    MONITOR_LIST     = "monitor_list",     -- approved elevator-monitor addresses
     -- pocket -> control
     PRESENCE         = "presence",         -- proximity ping (sender is authenticated)
-    -- manual control <-> pocket (same tunnel as PRESENCE; it is bidirectional)
-    PANEL_LIST       = "panel_list",       -- manual -> pocket: what buttons/switches exist
-    PANEL_STATE      = "panel_state",      -- manual -> pocket: what the redstone ACTUALLY does
-    PANEL_INPUT      = "panel_input",      -- pocket -> manual: a control was tapped
+    -- manual control / elevator controller <-> pocket (same tunnel as PRESENCE; bidirectional)
+    PANEL_LIST       = "panel_list",       -- panel -> pocket: what buttons/switches exist
+    PANEL_STATE      = "panel_state",      -- panel -> pocket: what the redstone ACTUALLY does
+    PANEL_INPUT      = "panel_input",      -- pocket -> panel: a control was tapped
+    -- elevator controller <-> elevator monitor (Protocol.NAMES.ELEVATOR tunnel)
+    ELEV_ATTACH      = "elev_attach",      -- controller -> monitor: I am your controller
+    ELEV_IO          = "elev_io",          -- monitor -> controller: channels it can read/drive
+    ELEV_STATE       = "elev_state",       -- monitor -> controller: inputs/outputs right now
+    ELEV_PULSE       = "elev_pulse",       -- controller -> monitor: pulse one output briefly
 }
 
 --- What a pocket may do with a manual panel right now. The manual PC decides this, per
@@ -172,6 +182,42 @@ end
 --- sent it, and the manual PC decides whether it counts.
 function Protocol.panelInput(controlId)
     return msg(Protocol.TYPES.PANEL_INPUT, { controlId = controlId })
+end
+
+-- ---------- server -> elevator controller ----------
+--- The elevator monitors the operator has approved. A controller accepts position reports
+--- ONLY from an address on this list, so a rogue PC at the shaft cannot lie about where a
+--- cabin is. Same discipline as CONTROL_LIST for pockets: the server decides who is
+--- trustworthy, the device never decides for itself.
+function Protocol.monitorList(addresses)
+    return msg(Protocol.TYPES.MONITOR_LIST, { addresses = addresses or {} })
+end
+
+-- ---------- elevator controller <-> elevator monitor ----------
+--- First message on a controller->monitor tunnel. Carries nothing: the tunnel's
+--- authenticated `sender` is the whole point, and the monitor checks that address against
+--- the control list the server gave it.
+function Protocol.elevAttach() return msg(Protocol.TYPES.ELEV_ATTACH) end
+
+--- Every redstone channel the monitor can reach, so the controller's floor form can offer
+--- them. `channels` is an array of plain RedstoneIO ids ("self/back", "self/left:pink").
+function Protocol.elevIo(channels)
+    return msg(Protocol.TYPES.ELEV_IO, { channels = channels or {} })
+end
+
+--- What the monitor's hardware is doing RIGHT NOW: `inputs` is what it reads (an Elevator
+--- Contact emits while the cabin is at its floor), `outputs` is what it is emitting (the
+--- readback of its own call pulses). Both are id -> bool. The controller renders/derives
+--- from this and never guesses.
+function Protocol.elevState(inputs, outputs)
+    return msg(Protocol.TYPES.ELEV_STATE, { inputs = inputs or {}, outputs = outputs or {} })
+end
+
+--- Pulse one of the monitor's outputs for `seconds`. The MONITOR times the pulse locally,
+--- so a lost or late message can never leave a call contact stuck energised — the worst
+--- case is a call that doesn't happen, not one that never ends.
+function Protocol.elevPulse(target, seconds)
+    return msg(Protocol.TYPES.ELEV_PULSE, { target = target, seconds = seconds })
 end
 
 return Protocol

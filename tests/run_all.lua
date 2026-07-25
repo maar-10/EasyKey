@@ -10,10 +10,14 @@ local modules = {
     "tests.test_redstone_io",
     "tests.test_panel",
     "tests.test_panel_feed",
+    "tests.test_access",
+    "tests.test_elevator",
+    "tests.test_elevmon_console",
     "tests.test_keypad",
     "tests.test_link",
     "tests.test_keystore",
     "tests.test_integration",
+    "tests.test_elevator_flow",
     -- real crypto: drives an actual ecnet2 handshake over loopback modems
     "tests.test_secure_net",
 }

@@ -68,6 +68,31 @@ Config.manual = {
 ---   id -> { name, type, use, target, fallback, invert, cooldown }
 Config.panelFile = "/easykey_panel.cfg"
 
+--- Elevator controller (multi-floor lifts). A floor call is always a short pulse, because
+--- that is all a Create Elevator Contact accepts.
+Config.elevator = {
+    range          = 100, -- blocks: pockets this close are shown the lift buttons
+    pressSeconds   = 0.5, -- length of a floor-call pulse
+    recallSeconds  = 2,   -- per-lift default: how long a lift refuses further calls after one
+    timeoutSeconds = 20,  -- per-lift default: how long a call counts as outstanding before
+                          -- we stop waiting for the cabin to report arriving
+    statePush      = 1.0, -- how often panel state is pushed to pockets (also a heartbeat)
+}
+
+--- The elevator controller's lifts:
+---   liftId -> { name, monitor, recall, timeout, floors = { { id, name, call, at }, ... } }
+--- `call`/`at` are channel ids; a "mon:" prefix means the channel is on that lift's monitor.
+Config.elevatorFile = "/easykey_elevators.cfg"
+
+--- Elevator monitor (the PC at the shaft). It pulses call contacts on command and reports
+--- which arrival contacts are live; it stores no configuration of its own beyond which
+--- sides carry a bundled cable (Config.sidesFile).
+Config.elevmon = {
+    statePush = 1.0, -- how often it reports its redstone to the attached controllers
+    maxPulse  = 5.0, -- refuse a pulse longer than this, whoever asks: a stuck call contact
+                     -- would leave a lift permanently summoned
+}
+
 --- Control-PC state. Both are written by its console UI, not edited by hand.
 Config.outputsFile = "/easykey_outputs.cfg" -- id -> { name, type, range }
 Config.sidesFile   = "/easykey_sides.cfg"   -- "<device>/<side>" -> { bundled = true }
@@ -75,7 +100,11 @@ Config.sidesFile   = "/easykey_sides.cfg"   -- "<device>/<side>" -> { bundled = 
 --- Server-only vaults.
 Config.keysFile     = "/easykey_keys.cfg"     -- salted+iterated hashes, never plaintext
 Config.pocketsFile  = "/easykey_pockets.cfg"  -- approved pocket addresses
-Config.controlsFile = "/easykey_controls.cfg" -- approved control addresses
+Config.controlsFile = "/easykey_controls.cfg" -- approved control/panel/elevator addresses
+--- Approved elevator monitors. A separate store from controlsFile on purpose: a monitor is
+--- NOT something a pocket should open a tunnel to, so it must not end up in the control
+--- list. It is pushed to elevator controllers instead (Protocol.monitorList).
+Config.monitorsFile = "/easykey_monitors.cfg"
 
 --- Cost of the salted key hash. Raise for more brute-force resistance; it only runs
 --- on the server, once per key entry (~0.2s per 4096 iters on a fast host, more

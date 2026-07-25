@@ -38,6 +38,11 @@ local sessions = Sessions.new({ sessionSeconds = Config.timing.session_seconds }
 local keys     = KeyStore.load(Config.keysFile, Config.seedKeys, { iters = Config.keyHashIterations })
 local pockets  = Devices.load(Config.pocketsFile)
 local controls = Devices.load(Config.controlsFile)
+--- Elevator monitors get their own store rather than joining `controls`, because the two
+--- lists are handed to different people: `controls` is what a POCKET is told to open tunnels
+--- to, and a monitor is not something a pocket should ever talk to. Monitors go to elevator
+--- controllers instead (Protocol.monitorList).
+local monitors = Devices.load(Config.monitorsFile)
 
 local conns     = {}  -- connId -> { conn, link, address, role }
 local pending   = {}  -- address -> { role, link, firstSeen }
@@ -62,7 +67,8 @@ local function log(text, level) app.log(text, level) end
 local function short(address) return SecureNet.fingerprint(address) end
 
 local function nameOf(address)
-    return pockets:nameOf(address) or controls:nameOf(address) or ("pocket-" .. short(address))
+    return pockets:nameOf(address) or controls:nameOf(address) or monitors:nameOf(address)
+        or ("pocket-" .. short(address))
 end
 
 local function pendingList()
@@ -83,7 +89,9 @@ local function refreshPending()
     app.ops.setAlert("Pending", #list > 0 and Palette.alert.pending or nil)
 end
 local function refreshKeys()    app.ops.setKeys(keys:list()) end
-local function refreshDevices() app.ops.setDevices(pockets:list(), controls:list()) end
+local function refreshDevices()
+    app.ops.setDevices(pockets:list(), controls:list(), monitors:list())
+end
 local function refreshSessions()
     local out = {}
     for _, s in ipairs(sessions:snapshot()) do
@@ -120,14 +128,30 @@ local function roleFor(address)
     return nil
 end
 
---- A manual panel PC is trusted exactly like a door control: same approval store, same
---- secure-set, and it goes in the control list pockets connect to. Only the role we SHOW
---- differs, so the operator can tell what they are approving.
+--- A manual panel and an elevator controller are trusted exactly like a door control: same
+--- approval store, same secure-set, and they go in the control list pockets connect to. All
+--- three publish something a pocket talks to, and all three need to know who is cleared.
+--- Only the role we SHOW differs, so the operator can tell what they are approving.
 local function isControlRole(role)
-    return role == Protocol.ROLES.CONTROL or role == Protocol.ROLES.MANUAL
+    return role == Protocol.ROLES.CONTROL
+        or role == Protocol.ROLES.MANUAL
+        or role == Protocol.ROLES.ELEVATOR
 end
 
---- Push the current secure-set to every connected, approved control/panel PC.
+--- An elevator monitor is trusted, but differently: it holds no sessions and no pocket ever
+--- speaks to it, so it neither receives the secure-set nor appears in the control list. What
+--- it needs is the CONTROL list — that is how it decides which elevator controller may order
+--- it to pulse a call contact.
+local function isMonitorRole(role) return role == Protocol.ROLES.ELEVMON end
+
+--- Is this address approved for the role it claims?
+local function isApprovedAs(role, address)
+    if isMonitorRole(role) then return monitors:isApproved(address) end
+    if isControlRole(role) then return controls:isApproved(address) end
+    return pockets:isApproved(address)
+end
+
+--- Push the current secure-set to every connected, approved control/panel/elevator PC.
 --- Runs on a timer, so it is intentionally NOT logged: it would drown the console.
 local function pushSecureSet()
     local m = Protocol.secureSet(sessions:snapshot())
@@ -142,19 +166,43 @@ local function pushControlList(link)
     send(link, Protocol.controlList(controls:addresses()))
 end
 
+local function pushMonitorList(link)
+    send(link, Protocol.monitorList(monitors:addresses()))
+end
+
+--- Re-push whichever trust list a device class depends on. Called whenever an approval
+--- changes, because every list a device acts on has to be pushed to it — these devices never
+--- poll, so a stale list means a controller ignoring a monitor that IS approved.
+local function pushTrustLists()
+    for _, c in pairs(conns) do
+        if c.role == Protocol.ROLES.POCKET and pockets:isApproved(c.address) then
+            pushControlList(c.link)
+        elseif c.role == Protocol.ROLES.ELEVATOR and controls:isApproved(c.address) then
+            pushMonitorList(c.link)
+        elseif isMonitorRole(c.role) and monitors:isApproved(c.address) then
+            pushControlList(c.link)
+        end
+    end
+end
+
 -- ---------- message handling ----------
 local function onHello(c, message)
     local claimed = message.role
-    c.role = isControlRole(claimed) and claimed or Protocol.ROLES.POCKET
+    c.role = (isControlRole(claimed) or isMonitorRole(claimed)) and claimed or Protocol.ROLES.POCKET
 
-    local approved = isControlRole(c.role)
-        and controls:isApproved(c.address) or pockets:isApproved(c.address)
+    local approved = isApprovedAs(c.role, c.address)
 
     if approved then
         pending[c.address] = nil
         send(c.link, Protocol.status(Protocol.STATUS.APPROVED))
-        if isControlRole(c.role) then
+        if isMonitorRole(c.role) then
+            -- A monitor takes orders from controllers, so what it needs is who they are.
+            pushControlList(c.link)
+            log("elevator monitor online " .. short(c.address), "note")
+        elseif isControlRole(c.role) then
             send(c.link, Protocol.secureSet(sessions:snapshot()))
+            -- An elevator controller additionally needs to know which monitors to believe.
+            if c.role == Protocol.ROLES.ELEVATOR then pushMonitorList(c.link) end
             log(c.role .. " online " .. short(c.address), "note")
         else
             pushControlList(c.link)
@@ -220,18 +268,20 @@ local function onUiAction(action, payload)
         local p = pending[payload]
         if not p then return end
         pending[payload] = nil
-        if isControlRole(p.role) then
+        if isMonitorRole(p.role) then
+            monitors:approve(payload, p.role .. "-" .. short(payload))
+            log("APPROVED elevator monitor " .. short(payload), "good")
+            if p.link then
+                send(p.link, Protocol.status(Protocol.STATUS.APPROVED))
+                pushControlList(p.link)
+            end
+        elseif isControlRole(p.role) then
             controls:approve(payload, p.role .. "-" .. short(payload))
             log("APPROVED " .. p.role .. " " .. short(payload), "good")
             if p.link then
                 send(p.link, Protocol.status(Protocol.STATUS.APPROVED))
                 send(p.link, Protocol.secureSet(sessions:snapshot()))
-            end
-            -- a new control changes who every approved pocket should ping
-            for _, c in pairs(conns) do
-                if c.role == Protocol.ROLES.POCKET and pockets:isApproved(c.address) then
-                    pushControlList(c.link)
-                end
+                if p.role == Protocol.ROLES.ELEVATOR then pushMonitorList(p.link) end
             end
         else
             pockets:approve(payload, "pocket-" .. short(payload))
@@ -241,6 +291,10 @@ local function onUiAction(action, payload)
                 pushControlList(p.link)
             end
         end
+        -- A new device changes somebody's trust list: a control changes who pockets ping and
+        -- who monitors obey, a monitor changes who controllers believe. Re-push them all
+        -- rather than reasoning about which case this was.
+        pushTrustLists()
         refreshPending(); refreshDevices()
 
     elseif action == "reject" then
@@ -271,13 +325,19 @@ local function onUiAction(action, payload)
 
     elseif action == "revoke_device" then
         local wasPocket = pockets:isApproved(payload)
-        -- keep its real role (control vs manual panel) for the queue + the log
+        local wasMonitor = monitors:isApproved(payload)
+        -- keep its real role (control / manual panel / elevator / monitor) for the queue + log
         local kind = roleFor(payload)
-            or (wasPocket and Protocol.ROLES.POCKET or Protocol.ROLES.CONTROL)
-        pockets:revoke(payload); controls:revoke(payload)
+            or (wasPocket and Protocol.ROLES.POCKET)
+            or (wasMonitor and Protocol.ROLES.ELEVMON)
+            or Protocol.ROLES.CONTROL
+        pockets:revoke(payload); controls:revoke(payload); monitors:revoke(payload)
         -- a revoked device must lose access now, not when its session lapses
         local hadSession = sessions:revoke(payload)
         if hadSession then pushSecureSet() end
+        -- ...and everyone who was told to trust it must be told again, or a controller keeps
+        -- believing a monitor the operator just pulled.
+        pushTrustLists()
 
         -- Tell the device itself, so its screen reflects reality immediately instead of
         -- after a reboot. It is still connected but no longer trusted, which is exactly

@@ -25,13 +25,15 @@ verify_one() {
   rm -rf "$c0"; mkdir -p "$c0"
   cp "$installer" "$c0/installer.lua"
 
-  # pocket + server render Basalt UIs. The real installer downloads Basalt; we seed it
-  # here so this check never depends on the network.
-  if [ "$role" = "pocket" ] || [ "$role" = "server" ] || [ "$role" = "manual" ]; then
-    if   [ -f "$EASYKEY/basalt.lua" ];    then cp "$EASYKEY/basalt.lua" "$c0/basalt.lua"
-    elif [ -f "$EASYKEY/../basalt.lua" ]; then cp "$EASYKEY/../basalt.lua" "$c0/basalt.lua"
-    fi
-  fi
+  # The Basalt roles. The real installer downloads Basalt; we seed the VENDORED FULL build
+  # here so this check never depends on the network AND matches what the installer fetches.
+  # (Seeding a smaller build would let a boot pass while the real one is missing an element:
+  # DropDown and ProgressBar are full-only.)
+  case "$role" in
+    pocket|server|manual|elevator)
+      cp "$EASYKEY/vendor/basalt-full.lua" "$c0/basalt.lua"
+      ;;
+  esac
 
   cat > "$c0/startup.lua" <<'EOF'
 local results = {}
@@ -65,6 +67,21 @@ for _, l in ipairs(fails) do say("  " .. l) end
 -- *prints* failures, so a missing module would look like a clean boot. We replicate
 -- what it does and let the error reach us instead.
 periphemu.create("back", "modem")
+
+-- Pin a well-formed server address so the roles that pair interactively get past pairing and
+-- actually initialize. Without this, control/manual/elevator/elevmon block in Discovery.find
+-- and this check never reaches their UI or their event loop at all.
+do
+  local okCfg, Config = pcall(dofile, "/easykey/config.lua")
+  if okCfg and Config and not fs.exists(Config.serverFile) then
+    pcall(function()
+      package.path = "/?.lua;/?/init.lua;" .. package.path
+      require("ccryptolib.random").initWithTiming()
+      local id = require("ecnet2").Identity("/.probe_server_id")
+      local f = fs.open(Config.serverFile, "w"); f.write(id.address); f.close()
+    end)
+  end
+end
 local bootErr = nil
 parallel.waitForAny(
   function()
@@ -102,3 +119,5 @@ verify_one server
 verify_one control
 verify_one pocket
 verify_one manual
+verify_one elevator
+verify_one elevmon

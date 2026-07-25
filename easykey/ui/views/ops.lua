@@ -206,9 +206,13 @@ function Ops.build(parent, region, config, emit)
         text = "REVOKE DEVICE", background = Palette.errorBg, foreground = Palette.onError,
     }):onClick(revokeSelectedDevice)
 
+    --- One row per approved device, prefixed by what it is, because "revoke" means very
+    --- different things for a pocket, a panel and a shaft monitor:
+    ---   P = pocket   C = door control / manual panel / elevator controller   M = elevator monitor
     --- @param pockets table array of { address, name }
     --- @param controls table array of { address, name }
-    function self.setDevices(pockets, controls)
+    --- @param monitors table|nil array of { address, name }
+    function self.setDevices(pockets, controls, monitors)
         local items = {}
         for _, d in ipairs(pockets or {}) do
             items[#items + 1] = {
@@ -221,7 +225,14 @@ function Ops.build(parent, region, config, emit)
             items[#items + 1] = {
                 key = d.address,
                 text = "C " .. short(d.address) .. " " .. tostring(d.name),
-                fg = Palette.normal, -- control/panel: running normally
+                fg = Palette.normal, -- control/panel/elevator: running normally
+            }
+        end
+        for _, d in ipairs(monitors or {}) do
+            items[#items + 1] = {
+                key = d.address,
+                text = "M " .. short(d.address) .. " " .. tostring(d.name),
+                fg = Palette.normal,
             }
         end
         devs.set(items)

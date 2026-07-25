@@ -146,6 +146,42 @@ function RedstoneIO:readBack(bundledSides)
     return out
 end
 
+--- Read what the world is driving INTO us, on the same channel ids `readBack` uses for
+--- outputs. Needed by the elevator monitor: a Create Elevator Contact emits a redstone
+--- signal while the cabin is stopped at its floor, so "where is the cabin" is an input.
+---
+--- Inputs and outputs are separate on the same side, so a side can be read and written
+--- without the two interfering — which is why this mirrors readBack instead of replacing
+--- it. `redstone_relay` exposes getInput/getBundledInput exactly like the global API, so
+--- relays and IE bundled cables come along for free.
+--- @return table id -> bool
+function RedstoneIO:readInputs(bundledSides)
+    bundledSides = bundledSides or {}
+    local out = {}
+    for _, device in ipairs(self.order or {}) do
+        local api = self.devices[device]
+        if api then
+            for _, side in ipairs(RedstoneIO.SIDES) do
+                local key = RedstoneIO.sideKey(device, side)
+                if bundledSides[key] then
+                    local ok, mask = pcall(api.getBundledInput, side)
+                    mask = (ok and type(mask) == "number") and mask or 0
+                    for _, color in ipairs(RedstoneIO.COLORS) do
+                        local bit = colors[color] or 0
+                        -- bit is a power of two, so this is a plain membership test
+                        out[RedstoneIO.colorId(device, side, color)] =
+                            (bit > 0) and (mask % (bit * 2)) >= bit or false
+                    end
+                else
+                    local ok, on = pcall(api.getInput, side)
+                    out[key] = (ok and on) and true or false
+                end
+            end
+        end
+    end
+    return out
+end
+
 --- Turn absolutely everything off. Used at boot and whenever the door controller can't
 --- justify emitting: no session, no signal.
 function RedstoneIO:allOff(bundledSides)

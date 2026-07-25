@@ -17,12 +17,16 @@ boot_one() {
   cp "$EASYKEY/tests/boot_smoke.lua" "$c0/startup.lua"
   printf '%s' "$role" > "$c0/which_role.txt"
 
-  # pocket + server both render Basalt UIs
-  if [ "$role" = "pocket" ] || [ "$role" = "server" ] || [ "$role" = "manual" ]; then
-    if [ -f "$EASYKEY/basalt.lua" ]; then cp "$EASYKEY/basalt.lua" "$c0/basalt.lua"
-    elif [ -f "$EASYKEY/../basalt.lua" ]; then cp "$EASYKEY/../basalt.lua" "$c0/basalt.lua"
-    else echo "basalt.lua not found (pocket boot needs it)"; return; fi
-  fi
+  # The Basalt roles. Always the vendored FULL build — that is what the installers fetch and
+  # what the user runs in-game, and a boot against a smaller build could pass while the real
+  # thing is missing an element (ProgressBar/DropDown are full-only).
+  case "$role" in
+    pocket|server|manual|elevator)
+      BASALT="$EASYKEY/vendor/basalt-full.lua"
+      [ -f "$BASALT" ] || { echo "vendor/basalt-full.lua not found (this role needs it)"; return; }
+      cp "$BASALT" "$c0/basalt.lua"
+      ;;
+  esac
 
   rm -f "$c0/boot_result.txt"
   timeout 60 "$CRAFTOS" --headless -d "$data" >/dev/null 2>&1 || true
@@ -35,3 +39,5 @@ boot_one server
 boot_one control
 boot_one pocket
 boot_one manual
+boot_one elevator
+boot_one elevmon

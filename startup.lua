@@ -23,7 +23,8 @@ if not system or not role then
     print("----------------")
     print("role.txt must contain  easykey:<role>")
     print("(the installer normally sets this for you)")
-    print("roles: pocket | server | control")
+    print("roles: pocket | server | control | manual")
+    print("       elevator | elevmon")
     print("Current value: " .. tostring(raw))
     return
 end

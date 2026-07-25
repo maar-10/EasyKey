@@ -8,12 +8,17 @@ return function(t)
     t:describe("redstone_io")
 
     --- A mock that records what was written and can be read back, like the real API.
+    --- `inPlain`/`inBundled` stand in for what the WORLD drives into the computer (an
+    --- Elevator Contact reporting a cabin): a separate set of channels from the outputs,
+    --- exactly as in-game, so a test can't accidentally read its own writes back as inputs.
     local function mockDevice()
-        local d = { plain = {}, bundled = {} }
+        local d = { plain = {}, bundled = {}, inPlain = {}, inBundled = {} }
         function d.setOutput(side, on) d.plain[side] = on and true or false end
         function d.getOutput(side) return d.plain[side] or false end
         function d.setBundledOutput(side, mask) d.bundled[side] = mask end
         function d.getBundledOutput(side) return d.bundled[side] or 0 end
+        function d.getInput(side) return d.inPlain[side] or false end
+        function d.getBundledInput(side) return d.inBundled[side] or 0 end
         return d
     end
 
@@ -119,6 +124,56 @@ return function(t)
     -- readBack reflects reality, not intent: something else changed the hardware
     self_.plain.front = true
     t:eq(io_:readBack(bundled)["self/front"], true, "readBack shows the hardware's actual state")
+
+    -- ---------- readInputs: what the world drives INTO us ----------
+    -- The elevator monitor's whole job. Inputs must be read from the input side of the API,
+    -- never confused with our own outputs — a call pulse we emitted must not read back as
+    -- "the cabin is here".
+    io_:apply(all, bundled)                 -- everything we can drive is ON
+    io_:apply({ ["self/left"] = true }, bundled)
+    local inNone = io_:readInputs(bundled)
+    t:eq(inNone["self/left"], false, "our own output is not reported as an input")
+    t:eq(inNone["self/back:pink"], false, "nor is a bundled output we drove")
+
+    self_.inPlain.right = true              -- an arrival contact wired to our right side
+    relay.inPlain.front = true              -- ...and one on a relay
+    self_.inBundled.back = colors.pink + colors.lime
+    local inp = io_:readInputs(bundled)
+    t:eq(inp["self/right"], true, "a plain input is read")
+    t:eq(inp["self/top"], false, "an unpowered side reads false")
+    t:eq(inp["redstone_relay_3/front"], true, "a relay's input is read")
+    t:eq(inp["self/back:pink"], true, "a bundled input colour is decoded")
+    t:eq(inp["self/back:lime"], true, "...and so is a second one on the same side")
+    t:eq(inp["self/back:white"], false, "an unset bundled input colour reads false")
+
+    -- every bit, not just the low ones (black = 32768, the classic bitmask off-by-one)
+    self_.inBundled.back = 65535
+    local inAll = io_:readInputs(bundled)
+    for _, c in ipairs(RedstoneIO.COLORS) do
+        t:eq(inAll["self/back:" .. c], true, "readInputs decodes " .. c)
+    end
+    self_.inBundled.back = 0
+    local inClear = io_:readInputs(bundled)
+    for _, c in ipairs(RedstoneIO.COLORS) do
+        t:eq(inClear["self/back:" .. c], false, "readInputs decodes " .. c .. " as off")
+    end
+    self_.inPlain.right = false; relay.inPlain.front = false
+
+    -- a device that throws mid-read must not take the monitor down either
+    local blind = mockDevice()
+    blind.getInput = function() error("relay yanked out", 0) end
+    local io3 = RedstoneIO.new({
+        peripheral = {
+            getNames = function() return { "redstone_relay_9" } end,
+            getType = function() return "redstone_relay" end,
+            wrap = function() return blind end,
+        },
+        redstone = mockDevice(),
+    })
+    io3:discover()
+    local okIn, res = pcall(function() return io3:readInputs({}) end)
+    t:ok(okIn, "a peripheral that errors mid-read doesn't crash the monitor")
+    t:eq(okIn and res["redstone_relay_9/back"], false, "...and the channel reads false, not nil")
 
     -- ---------- allOff ----------
     io_:apply(all, bundled)

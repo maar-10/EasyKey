@@ -5,6 +5,11 @@ custom on-screen keypad and your pocket computer becomes **secure for 5 minutes*
 while secure, base doors open automatically as you walk up to them, and lock again when
 you leave or the timer runs out.
 
+The same clearance drives two panels from the pocket's own screen: a **manual panel** of
+buttons, switches and latches for gates and machinery, and an **elevator controller** that
+turns a multi-floor Create lift into one call button per floor, showing you where the cabin
+is.
+
 **All radio traffic is encrypted and replay-protected** ([ecnet2](https://github.com/migeyel/ecnet):
 Noise XK, X25519 + AEAD). Nothing worth stealing lives on a pocket or a door
 controller — the keys live only on the server, stored hashed.
@@ -16,10 +21,17 @@ building blocks by copying them in, and never touches the other systems.
 ```
   pocket(s) ──encrypted tunnel──► server (VAULT: keys, approvals, sessions)
        │                             │
-       │                             └──encrypted tunnel──► control PC(s) + manual PC(s)
-       └────encrypted tunnels────────────────────────────►  (secure-set)
-              (presence + distance)      → control: doors open by proximity
-              (panel taps + feedback)    → manual: redstone on button/switch taps
+       │                             ├─encrypted tunnel─► control / manual / elevator PC(s)
+       │                             │                     (secure-set)
+       │                             └─encrypted tunnel─► elevator monitor(s)
+       │                                                   (which controllers to obey)
+       └────encrypted tunnels────────────────────────────►
+              (presence + distance)      → control:  doors open by proximity
+              (panel taps + feedback)    → manual:   redstone on button/switch taps
+              (panel taps + feedback)    → elevator: multi-floor lift calls
+                                              │
+                                              └─encrypted tunnel─► elevator monitor
+                                                  (call pulses out, cabin position back)
 ```
 
 ## Computers & parts
@@ -30,12 +42,20 @@ building blocks by copying them in, and never touches the other systems.
 | **server** | **advanced** computer + **advanced monitor** (for the operations UI) | ender modem | exactly one |
 | **control** | normal computer is enough (proximity doors) | ender modem | one per door area |
 | **manual** | **advanced** computer + **advanced monitor** (remote panel) | ender modem | as many as you like |
+| **elevator** | **advanced** computer + **advanced monitor** (multi-floor lifts) | ender modem | as many as you like |
+| **elevmon** | normal computer is enough (sits at a lift shaft) | ender modem | one per lift |
 
-There are two kinds of control PC, and they differ only in what pulls the trigger:
+There are three kinds of control PC, and they differ only in what pulls the trigger:
 
 - **control** — fires on **proximity**: walk up with a secure pocket and the door opens.
 - **manual** — fires on **intent**: a secure pocket taps a button or flips a switch in its
-  own `PANEL` tab. Nothing opens by walking past.
+  own `Gates`/`Lifts` tab. Nothing opens by walking past.
+- **elevator** — fires on intent too, but is built for a **shaft with many floors**: every
+  floor is one call button, and it knows *where the cabin is*. Use the manual panel for a
+  simple one-shot lift; use this when there are floors to choose between.
+
+**elevmon** is not a control at all — it is a reporter that also does the wiring. See
+[Elevators](#elevators-multi-floor-lifts) below.
 
 Why advanced pocket: the keypad is a touch UI, and only advanced pocket computers fire
 click events. Why ender modems: unlimited range **and** they report block `distance`,
@@ -56,15 +76,23 @@ Host the installers on pastebin or your GitHub, then on each computer:
 wget run <raw-url-of-the-matching-installer>
 ```
 
-- `install_easykey_pocket.lua`  → advanced pocket computers (also downloads Basalt)
-- `install_easykey_server.lua`  → the one server
-- `install_easykey_control.lua` → each proximity door controller
-- `install_easykey_manual.lua`  → each manual panel PC
+- `install_easykey_pocket.lua`   → advanced pocket computers (also downloads Basalt)
+- `install_easykey_server.lua`   → the one server
+- `install_easykey_control.lua`  → each proximity door controller
+- `install_easykey_manual.lua`   → each manual panel PC
+- `install_easykey_elevator.lua` → each multi-floor elevator controller
+- `install_easykey_elevmon.lua`  → the PC at each lift shaft
 
 Each installer is self-contained (~300 KB): it embeds only the files that role needs
 **plus the pinned ecnet2 + ccryptolib crypto libraries**, so there is no half-downloaded
 install. It sets `role.txt` for you. Attach the ender modem, then reboot — `startup.lua`
 launches the right program automatically. Unpacking the crypto libs takes a few seconds.
+
+> **Re-running an installer is safe for your data.** It writes code files and `role.txt`
+> only; every `/easykey_*.cfg` (the server's keys, approvals and monitor list; a control's
+> outputs; a panel's controls; an elevator's lifts) and the pinned server address in
+> `/easykey_server.txt` are left alone. Upgrading the server does **not** cost you a
+> re-pair, a re-approval, or your keys.
 
 ## First-time setup
 
@@ -94,7 +122,21 @@ highlights blue), then tap **APPROVE** (or **REJECT**). There is no auto-trust �
 is the only way in. The device shows "awaiting approval" until you do.
 
 Approve your control PCs too; the server then tells each approved pocket which controls
-to ping.
+to ping. The row says which kind of device is asking (`pocket` / `control` / `manual` /
+`elevator` / `elevmon`), so you always know what you are trusting.
+
+Where each kind lands, and what it is then told:
+
+| Approved as | Goes in | The server then pushes it |
+|---|---|---|
+| `pocket` | pockets | the **control list** — who to open panel/presence tunnels to |
+| `control` / `manual` / `elevator` | controls | the **secure-set** — who is currently cleared |
+| `elevator` (additionally) | — | the **monitor list** — which shaft monitors to believe |
+| `elevmon` | monitors | the **control list** — which controllers may order it to pulse |
+
+An `elevmon` deliberately does **not** join the control list, because no pocket should ever
+open a tunnel to a shaft monitor. On the **`Devs`** tab the prefix tells you which store a
+row is in: `P` pocket, `C` control/manual/elevator, `M` elevator monitor.
 
 ### 3b. Set your own key
 On the **`Keys`** tab tap **ADD KEY**, type it on the keypad, press **OK**. It is hashed
@@ -188,6 +230,100 @@ control that didn't fire visibly doesn't move, and you get a reason instead of a
 | `access denied` | in range, but the server hasn't cleared you |
 | `signal error` | cleared and in range, but the redstone didn't do as asked — or the panel went quiet |
 
+## Elevators (multi-floor lifts)
+
+The manual panel can already drive a simple one-shot lift as an ordinary control. The
+**elevator** role is for the case it handles badly: a shaft with several floors, where every
+floor is a call button and the interesting question isn't "is it on" but **where is the
+cabin**.
+
+### What the mod actually allows
+
+Worth knowing up front, because it shapes everything below. Create's ComputerCraft
+integration covers Train Station, Train Schedule, Display Link, Rotation Speed Controller,
+Sequenced Gearshift, Speedometer and Stressometer. **The Elevator Pulley is not a
+peripheral** — there is no way to move a cabin or read its floor from Lua with Create +
+Create: Aeronautics + Immersive Engineering alone.
+
+What an **Elevator Contact** does give us is exactly two redstone hooks, and they are the
+whole design:
+
+- give a contact a redstone signal → **the cabin comes to that floor**;
+- a contact **emits** a redstone signal while the cabin is stopped at its floor.
+
+So calls are redstone-out and position is redstone-in, at both ends, always. (If you ever
+install an addon that exposes the pulley to CC — *Create: Avionics* does — the **elevmon**
+role is the single file that would need swapping; nothing else in EasyKey assumes redstone.)
+
+### The two roles
+
+- **elevator** — the controller. Advanced computer + monitor. Holds the lifts and floors,
+  publishes them to pockets, decides who may call.
+- **elevmon** — a normal computer at the shaft. It does two things and has no opinions:
+  **pulses** a call contact when its controller asks, and **reports** which arrival contacts
+  are live. Because it is already down there with an ender modem, the controller needs **no
+  cable run to the shaft at all** — a call rides an encrypted tunnel instead of a wire.
+
+Trust runs both ways and neither end decides for itself: the controller believes position
+reports only from monitors the **server** approved, and a monitor obeys a pulse only from a
+controller the **server** approved. A revoked monitor is dropped immediately, position and
+all — stale position data is worse than none.
+
+### Wiring one up
+
+1. **Install + approve both.** `install_easykey_elevmon.lua` on the shaft PC,
+   `install_easykey_elevator.lua` on the controller. Pair each to the server and approve
+   them under `Pend` (they show as **elevmon** and **elevator**).
+2. **Find your channels on the monitor.** Its console lists every redstone channel it can
+   reach, with an **IN** and an **OUT** column. Press **b** to flip a side to its 16 bundled
+   colours (IE interface connectors). Press **f** for *busy only* — then ride the lift: the
+   one row that lights up under **IN** is that floor's arrival contact. That is the wiring
+   workflow; write the ids down as you go.
+3. **Create the lift** on the controller's **Lifts** tab → **NEW**. Name it, pick its
+   **position monitor** from the dropdown (only server-approved monitors are offered), and
+   set two timings:
+   - **Recall** — how long the lift refuses further calls after one is accepted. The
+     anti-double-tap lock, and what the pocket shows as `~Ns`. Default 2s.
+   - **Timeout** — how long a call counts as outstanding before the console stops waiting
+     for an arrival. Roughly "how long the longest ride takes". Default 20s. It never holds
+     redstone.
+4. **Add the floors.** With the lift selected, go to **Floors** → **NEW** per floor:
+   - **Name** — short; the pocket shows `<lift> <floor>`, e.g. `Main Ground`.
+   - **Call output** — the channel pulsed to summon the cabin here. Required.
+   - **Arrival input** — the channel that floor's contact drives. Optional, but without it
+     nothing can ever light up as "the cabin is here".
+
+   Both dropdowns list the controller's own channels **and** the monitor's in one place; a
+   `mon:` prefix means it lives on the monitor. Pick the channel the wire is on and forget
+   which computer it belongs to. **MOVE UP** / **MOVE DOWN** put the list in shaft order.
+5. **Tap a floor** from any cleared pocket in range. Bottom floors, top floors, IE bundled
+   colours and relay sides all work the same way.
+
+### What you see
+
+Every floor appears as an ordinary button on the **Lifts** tab of every pocket in range —
+including pockets that aren't cleared, which see the buttons and get "access denied" if they
+tap. Two things the pocket already draws carry the extra meaning:
+
+| On the pocket | Means |
+|---------------|-------|
+| the confirm circle **filled green** | the cabin is **at that floor**, read from its arrival contact |
+| `~Ns` next to a floor | that lift is in its recall lock; wait, then call again |
+| nothing lit on any floor | the cabin is between floors, or that floor has no arrival input |
+
+On the controller's own monitor: **Lifts** shows each lift with its floor count and current
+floor; **Floors** shows the selected lift's floors with `loc`/`mon` per channel and the full
+ids on the detail lines; **Outs** shows this PC's channels in both directions; **Devices**
+shows nearby pockets and the range. **USE** opens the operator's own copy of the floor
+buttons — the same view a pocket gets, gated on this PC's approval instead of a session, for
+when a pocket can't be used. The whole panel goes **red** in there so you never forget you
+are driving the base by hand.
+
+A floor wired to a channel that has stopped existing (a side got bundled, a monitor got
+revoked) is painted **red** and says `MISSING`. Bundling a side redefines its channels, so
+the console names every floor that just lost its wiring rather than leaving you with a
+button that quietly does nothing.
+
 ## Using it
 
 1. The pocket shows Minecraft **day + time** (sun/moon indicator), the **real-life
@@ -215,6 +351,14 @@ Multiple people, multiple pockets and several valid keys all work at once.
 - **Reading the server's disk doesn't hand over the keys** — only salted, iterated
   SHA-256 hashes are stored (`Config.keyHashIterations`, default 4096).
 - **Lost a pocket?** Revoke it on the server; it loses access on the next push (≤5s).
+- **A rogue PC at a lift shaft can neither move a cabin nor lie about one.** An elevator
+  controller obeys position reports only from monitors the server named, and a monitor obeys
+  call pulses only from controllers the server named — both checked against the tunnel's
+  authenticated sender, so neither side can be impersonated. Revoke a monitor and the
+  controller drops its tunnel *and* its last known position on the next push.
+- **A lost message can't leave a lift summoned.** A call pulse is timed by the *monitor*, not
+  by the controller that asked, and clamped to `elevmon.maxPulse`. A controller that dies
+  mid-call costs you a call that didn't happen — never a call contact stuck on.
 
 **Accepted limits (be honest with yourself about these)**
 - **CC storage is plaintext.** Anyone holding a device can read its files. That's *why*
@@ -240,6 +384,10 @@ Multiple people, multiple pockets and several valid keys all work at once.
 - `proximity.range` / `closeDelay` — door defaults (per-door overrides win).
 - `keypad.chars` / `keypad.cols` — keypad buttons and grid width.
 - `keyHashIterations` — key-hash cost.
+- `elevator.*` — lift defaults: `range`, `pressSeconds` (call pulse length),
+  `recallSeconds` and `timeoutSeconds` (per-lift overrides win).
+- `elevmon.maxPulse` — the longest pulse a shaft monitor will obey, whoever asks. A call
+  contact held down would leave a lift permanently summoned, so this is clamped hard.
 
 There are **no modem channels to configure**: ecnet2 derives channels from the protocol
 name.
@@ -249,12 +397,13 @@ name.
 Requires CraftOS-PC (and Node to regenerate installers).
 
 ```bash
-bash tests/run_headless.sh      # 363 tests: pure logic + a REAL encrypted handshake
+bash tests/run_headless.sh      # 770 tests: pure logic + a REAL encrypted handshake
 bash tests/run_ui_pocket.sh     # renders every pocket screen (+ asserts nothing is invisible)
 bash tests/run_ui_server.sh     # renders the server UI @ 83x32 (a 5x3 monitor)
 bash tests/run_ui_interact.sh   # drives the server's buttons: selection -> action -> payload
 bash tests/run_ui_manual.sh     # renders + drives the manual panel PC's UI
-bash tests/run_boot_smoke.sh    # boots all 3 roles with an emulated modem
+bash tests/run_ui_elevator.sh   # renders + drives the elevator controller's UI
+bash tests/run_boot_smoke.sh    # boots all 6 roles with an emulated modem
 node tools/gen_installers.js    # regenerate installers (refuses to ship an incomplete one)
 bash tests/verify_installers.sh # installs, compiles AND boots each role from its installer
 ```
@@ -266,10 +415,17 @@ layer couldn't see: **render** (layout), **colour** (readable — text-only dump
 showed a "perfect" console that was black-on-black in-game), and **interaction**
 (selection actually reaches the action).
 
+Every Basalt test runs against the **vendored full build** (`vendor/basalt-full.lua`) —
+the same one the installers fetch. `DropDown` and `ProgressBar` are full-only, so a test
+against a smaller build could pass while the real thing is missing an element.
+
 **Not covered headless, verify in-game:** a true 3-computer round-trip (one CraftOS
-computer can't be three), and click routing on a real monitor —
-`basalt.update("mouse_click", …)` does not reach a window-backed frame, so clicks cannot
-be simulated in this harness.
+computer can't be three) — so for elevators, the controller↔monitor tunnel is exercised at
+the message level (`tests/test_elevator_flow.lua` drives the real protocol messages between
+all four parties) but not over two real modems. Also not covered: click routing on a real
+monitor — `basalt.update("mouse_click", …)` does not reach a window-backed frame, so clicks
+cannot be simulated in this harness, and a real Create Elevator Contact's exact redstone
+timing.
 
 ## File layout
 
@@ -287,15 +443,21 @@ easykey/
   logic/                    PURE, unit-tested
     sessions.lua            server sessions, keyed by authenticated address
     outputs.lua             door-control machine (off/toggle/press, range, re-arm)
-    panel.lua               manual-panel machine (button/switch, ownership, grace)
+    panel.lua               manual-panel machine (button/switch/latch, ownership, grace)
+    access.lua              the shared gate: approval + secure-set + range + presence
+    elevator.lua            lift machine (floors, call pulses, position, local or "mon:")
+    panel_feed.lua          the pocket's view of the panels around it
     keypad_model.lua        keypad entry buffer
-  redstone_io.lua           control-PC hardware: sides, relays, bundled masks, feedback
+  redstone_io.lua           control-PC hardware: sides, relays, bundled masks, both directions
   link.lua                  queues sends until an ecnet2 tunnel completes
-  server.lua                vault + approvals + secure-set push (+ monitor UI)
+  server.lua                vault + approvals + secure-set/control/monitor push (+ monitor UI)
   control.lua               proximity door driver + its console UI
   manual.lua                manual panel PC (redstone from pocket taps) + its UI
+  elevator.lua              elevator controller (floors as panel buttons) + its UI
+  elevmon.lua               the PC at a lift shaft: pulses calls, reports arrivals
   pocket/                   Basalt pocket UI: run.lua, app.lua, views/
-  ui/                       Basalt server UI: server_app.lua, keypad.lua (shared), views/
+  ui/                       Basalt monitor UIs: server_app, manual_app, elevator_app,
+                            elevmon_console (terminal), keypad/keyboard (shared), views/
 vendor/                     pinned ecnet2 + ccryptolib (MIT) — see vendor/README.md
 tools/gen_installers.js     installer generator
 tests/                      headless CraftOS-PC test + render + boot harness
